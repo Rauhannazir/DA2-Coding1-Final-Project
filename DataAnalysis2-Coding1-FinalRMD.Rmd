@@ -1,0 +1,257 @@
+---
+title: "Data Analysis : Term Project"
+author: "Rauhan Nazir"
+output: pdf_document
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r include=FALSE, message=FALSE, warning=FALSE}
+# CLEAR MEMORY
+rm(list=ls())
+
+
+# Import libraries
+library(tidyverse)
+library(haven)
+library(data.table)
+library(rms)
+library(lspline)
+library(huxtable)
+library(modelsummary)
+library(pscl)
+library(esquisse)
+library(ggplot2)
+library(dplyr)
+library(kableExtra)
+library(fixest)
+
+```
+
+# Overview and Goal
+There is a common perception around the footballing world that when it comes to the market value of English football players, they are over-rated compared to footballers from other countries. There are quite a few examples that come to my mind that support this perception. One would be the transfer of Harry Maguire from Leicester City to Manchester United. The goal of this assignment is to find out or come closer to finding out whether clubs actually do pay a premium when it comes to buying English players or is it just a misconception. So the y variable from the data that I chose is the market value of the players and the x variable is the country that they belong to. While there are several other confounding variables that were introduced to make sure that the relation between x and y variables was not an exaggerated one and it was as close to reality as possible.
+
+
+```{r include=FALSE, message=FALSE, warning=FALSE}
+#importing data
+raw_data <- read.csv(url("https://raw.githubusercontent.com/Rauhannazir/DA2-Coding1-Final-Project/main/players_value.csv"))
+#View(raw_data)
+```
+
+## Quality of Data and Data Munging
+This data set contained information about the top 500 highest valued players in the market and it is a quite representative data set as there is no selection bias. There is almost no chance that the variables contain any measurement error as most of them are categorical variables such as the name of the players or what country they belong to or what club do they represent. Numerical variables such as goals, number of assists and the cards they received while playing are also the kind of data that do not have measurement error as it is quite factual. The only variable that might contain measurement error is actually the market value, as it is an estimation and there is no way to find out the actual value unless these players actually make a transfer. However, I am quite confident about these numbers as well as this value took into account several metrics such as Future prospects, Age, Performance at the club and national team, Level and status of the league, both in sporting and financial terms, Reputation/prestige, Development potential,League-specific features, Marketing value, Number & reputation of interested clubs, Performance potential, Experience level, Injury susceptibility, Different financial conditions of clubs and leagues, General demand and "trends" on the market,General development of transfer fees, External factors such as the corona virus pandemic and its consequences.
+
+The data set that I used did not require much cleaning, however there were some changes that I made.
+
+### Adding Goals per Match and Assists per Match Columns
+The columns that I added were the *Goals per Match*(Goals/Matches) and *Assists per Match*(Assists/Matches). Instead of using the absolute values of goals and assists, it made more sense to normalize these variables by divinding them by number of matches each player played. Giving us more accurate measure of their performance.
+
+### Changing column names 
+One minor thing that I did was change the column name of Market Value of Players for simplicity as it contained special characters.
+
+```{r include=FALSE, message=FALSE, warning=FALSE}
+#Changing the name of the market value column
+raw_data$Market.Value.In.Millions <- raw_data$Markey.Value.In.Millions.Â..  
+raw_data$Markey.Value.In.Millions.Â.. <- NULL
+
+#Adding goals per match column
+raw_data <-  raw_data %>% mutate(gpm = Goals/Matches)
+raw_data$gpm <- round(raw_data$gpm,3)
+
+
+#Adding assists per match column
+raw_data <-  raw_data %>% mutate(apm = Assists/Matches)
+raw_data$apm <- round(raw_data$apm,3)
+
+#Removing NAs of Market Value of Players in case there were any
+raw_data <-  raw_data %>% filter(!is.na(Market.Value.In.Millions))
+
+```
+
+### Creating a binary variable for English Players
+To answer the main question about the market value of English players I decided to assign binary values to the column of country, where it is going to be 1 if the player is English and 0 for all of the other nationalities, which is the x variable that our focus is one . Market Value of players will be regressed on this binary variable. 
+
+```{r include=FALSE, message=FALSE, warning=FALSE}
+#Making a column with binary values for English Players
+raw_data$english <- ifelse(raw_data$Country == "England",1,0)
+```
+
+
+### Changing the position of the players 
+One other thing that I decided to do while cleaning the data was to take right wingers and left wingers as just wingers as there is no major difference between the two other than the side. Same was done for right backs and left backs as I just took them as full backs. Even though some teams have a preference to attack more from one of the sides depending on the formation and the tactics however for the kind of analysis that I am doing, it makes more sense to treat them similarly. Finally it was conscious decision to not treat all midfielders the same as it is more likely that certain midfielders are more valued than others due to their position, for instance attacking midfielders could be more valued than defensive midfielders.
+
+```{r include=FALSE, message=FALSE, warning=FALSE}
+#Changing Right and Left Wingers to Wingers
+raw_data$Position[raw_data$Position == "Left Winger"] <- "Winger"
+raw_data$Position[raw_data$Position == "Right Winger"] <- "Winger"
+
+#Changing Left back and Right Back to Full Back
+raw_data$Position[raw_data$Position == "Right-Back"] <- "Full-Back"
+raw_data$Position[raw_data$Position == "Left-Back"] <- "Full-Back"
+
+#To check for the final unique positions that a player can belong to
+unique(raw_data$Position)
+```
+
+
+### Checking for Skewness and deciding what variable to use (log/absolute)
+The other decision that I had to make was to decide whether to use *absolute values* of the market value of players or take the *log values* instead. For that I checked the distribution through a geom density curve. The absolute values were right skewed so for that reason I took the log and the distribution of that was relatively more normally distributed.Hence that was the variable that I decided to go ahead with and use in my regressions.
+
+
+```{r echo=FALSE,include=TRUE, message=FALSE, warning=FALSE}
+#Distribution of the absolute values
+ggplot(data = raw_data, aes(x=Market.Value.In.Millions)) + geom_density()
+
+#Distribution of the log values
+ggplot(data = raw_data, aes(x=log(Market.Value.In.Millions))) + geom_density()
+
+
+#Creating variable for log market value of players
+raw_data$logMV <- log(raw_data$Market.Value.In.Millions)
+
+```
+
+## Data Summary Table
+
+I also created a data summary table to know more about the values and also the data summary skim function that gives more insight into the distribution of variables.
+```{r include=FALSE, message=FALSE, warning=FALSE}
+
+P95 <- function(x){ quantile(x,.95,na.rm=T)}
+P5 <- function(x){ quantile(x,.05,na.rm=T)}
+
+
+ds <- datasummary(  (`Matches` = Matches ) +
+                    (`Goals` = Goals) +
+                    (`Own Goals` = Own.Goals) +
+                    (`Assists` = Assists )+
+                    (`Red Cards` = Red.Cards) +
+                    (`Assists` = Assists )+
+                    (`Yellow Cards` = Yellow.Cards)+
+                    (`Market Value Millions` = Market.Value.In.Millions)+
+                    (`Goals per Match`= gpm)+
+                    (`Assists per Match`= apm )+
+                    (`Log of MArket Value`= logMV) ~
+                    Mean + Median + SD + Min + Max + P5 + P95 ,
+                  data = raw_data ,
+                  title = 'Descriptive statistics') %>%
+                kableExtra::kable_styling(latex_options = c("HOLD_position","scale_down"))
+   
+ds
+
+# data summary skim to check the variable summary and skewness of the observation
+datasummary_skim(raw_data)
+
+```
+
+
+```{r echo=FALSE,include=TRUE, message=FALSE, warning=FALSE}
+ds
+datasummary_skim(raw_data)
+```
+
+## Correlation Matrix 
+Before running the regressions I made a correlation matrix to explore the correlations between different variables. At first glance it seems like there is no significant relation between a player being English and Log of Market value. While variables like Goals per match and assists per match has a much stronger correlation. However this will be explored further with the regressions to be more sure about the relation between nationality and log of market value.
+
+
+```{r include=FALSE, message=FALSE, warning=FALSE}
+# Checking correlations of variables with Log of Market Value
+
+numeric_df <- keep( raw_data , is.numeric )
+
+cT <- round( cor( numeric_df , use = "complete.obs") , 2 )
+# create a lower triangular matrix
+cT[ upper.tri( cT ) ] <- NA
+# Put it into a tibble format
+melted_cormat <- melt( cT , na.rm = TRUE)
+# Now we can create a heat-map
+cor_matrix <- ggplot( data = melted_cormat, aes( Var2 , Var1 , fill = value ) )+
+  geom_tile( color = "white" ) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, limit = c(-1,1), space = "Lab",
+                       name="Correlation") +
+  theme_bw()+
+  theme( axis.text.x = element_text(angle = 45, vjust = 1,
+                                    size = 10, hjust = 1))+
+  labs(y="",x="")+
+  coord_fixed()
+cor_matrix
+
+```
+
+```{r echo=FALSE,include=TRUE, message=FALSE, warning=FALSE,out.width="80%"}
+cor_matrix
+
+```
+
+
+
+## Deciding whether to use Splines
+Final thing to consider before running the regressions was figuring out if I needed knots at different points based on the relations of x variables (numeric) with the market value in different ranges. For that I used loess. It showed that there was no need for any knots as there was no significant change in the trend throughout.
+
+```{r echo=FALSE,include=TRUE, message=FALSE, warning=FALSE,fig.show="hold", out.width="33%"}
+#Age
+graph_dist <- ggplot(data = raw_data, aes(x=Age, y=logMV))+
+  geom_smooth(formula = y~x, method = "loess")
+graph_dist
+
+#goals per match
+graph_dist1 <- ggplot(data = raw_data, aes(x=gpm, y=logMV))+
+  geom_smooth(formula = y~x, method = "loess")
+graph_dist1
+
+#Assists per match
+graph_dist2 <- ggplot(data = raw_data, aes(x=apm, y=logMV))+
+  geom_smooth(formula = y~x, method = "loess")
+graph_dist2
+
+```
+
+
+
+## Regressions
+For the first one I regressed log of Market Value on English (Binary variable). There was no significant relation between the two variables as 0 was in the range of the confidence interval. However, to further explore this, I added confounding variables, adding one after each regression to find out what the exact impact of controlling for other x variables is and the impact of them on the regression model. The relation between the goals per match and logMV was highly significant, for goal per match to be higher by one unit, on average the logMV is going to be higher than almost 45%, as shown in the results of regression 2. For every confounding variable added, adjusted R squared increased, so it made sense to include them in the regression. The most significant increase came after adding the Club as a factor in the regression model. In the final regression, goals per match were significant at a confidence interval of 99% while the assists per match were significant at a confidence interval of 95%, while the relation of logMV was still insignificant. Below is the final regression that was run.
+
+$$MarketValue(log):=\beta_0+\beta_1English+\beta_2Gpm+\beta_3Apm+\beta_4Age+\beta_5Position+\beta_6Club$$
+
+```{r include=FALSE, message=FALSE, warning=FALSE}
+reg1 <- feols( logMV~ english, data = raw_data, vcov = "hetero")
+
+reg2 <- feols( logMV~ english + gpm, data = raw_data, vcov = "hetero")
+
+
+reg3 <- feols( logMV~ english + gpm + apm, data = raw_data, vcov = "hetero")
+
+
+reg4 <- feols( logMV~ english + gpm + apm + Age, data = raw_data, vcov = "hetero")
+
+
+reg5 <- feols( logMV~ english + gpm + apm + Age + as.factor(Position) , data = raw_data, vcov = "hetero")
+
+
+reg6 <- feols( logMV~ english + gpm + apm + Age + as.factor(Position) + as.factor(Club) , data = raw_data, vcov = "hetero")
+
+
+summarry_reg <- msummary(list(reg1 , reg2 , reg3 , reg4,reg5,reg6),
+         fmt="%.2f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|AIC|BIC|R2|PseudoR2|R2 Adj.|Std.Errors',
+         stars=c('*' = .05, '**' = .01),
+          title = "Regression Model Summary") %>%
+  kableExtra::kable_styling(latex_options = "hold_position")
+
+summarry_reg
+
+
+```
+
+## Conclusion
+
+While our analysis did not support the perception that English players are over valued and that you have to pay a premium, it does not provide us with conclusive evidence. I say that because firstly, the data set only contained data on the players in 2021, so it does not analyze the trends for a long enough time aand secondly, as mentioned earlier that there could be a measurement error in the market value of players as it is an estimation and it could be the case that some important variable was not taken into account while estimating this value. The perception is so strong and the examples are so frequent that follow the trend of English players being over valued, this hypothesis is worth exploring further to move closer to reality.
+
+## Appendix
+
+### Exhibit 1
+The final regression results
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+summarry_reg
+```
